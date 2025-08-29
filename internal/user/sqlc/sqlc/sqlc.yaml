@@ -1,0 +1,15 @@
+version: "2"
+
+sql:
+  - engine: postgresql
+    # from internal/user/sqlc/sqlc/ up to repo root, then pkg/migrations/up
+    schema: "../../../../pkg/migrations/up"
+    # queries are one level up (../queries) relative to this file
+    queries: "../queries"
+    gen:
+      go:
+        package: db
+        out: "../gen"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_db_tags: true

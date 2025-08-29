@@ -1,0 +1,1 @@
+-- Initial migration for core database (empty placeholder)

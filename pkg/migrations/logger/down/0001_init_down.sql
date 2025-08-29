@@ -1,0 +1,1 @@
+-- Rollback migration for logger service (empty placeholder)

@@ -1,0 +1,1 @@
+-- Initial migration for gateway service (empty placeholder)

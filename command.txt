@@ -1,0 +1,5 @@
+# Private key (PKCS#1 PEM)
+openssl genrsa -out jwtRS256.key 2048
+
+# Public key (PEM)
+openssl rsa -in jwtRS256.key -pubout -out jwtRS256.key.pub

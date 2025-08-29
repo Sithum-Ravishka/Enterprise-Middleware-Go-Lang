@@ -1,0 +1,28 @@
+version: v2
+
+plugins:
+  # Go messages
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt:
+      - paths=source_relative
+
+  # Go gRPC stubs
+  - remote: buf.build/grpc/go
+    out: gen/go
+    opt:
+      - paths=source_relative
+
+  # gRPC-Gateway HTTP handlers (generates the *.pb.gw.go files)
+  - remote: buf.build/grpc-ecosystem/gateway
+    out: gen/go
+    opt:
+      - paths=source_relative
+      - generate_unbound_methods=true
+
+  # (Optional) OpenAPI v2
+  - remote: buf.build/grpc-ecosystem/openapiv2
+    out: gen/openapiv2
+    opt:
+      - allow_merge=true
+      - merge_file_name=user-platform

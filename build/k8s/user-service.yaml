@@ -1,0 +1,96 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: user-platform
+spec:
+  selector:
+    app: user-service
+  ports:
+    - name: grpc
+      port: 50051
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: user-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "user-service"
+    spec:
+      automountServiceAccountToken: false   # no K8s API access needed
+      containers:
+        - name: user-service
+          image: user-service:v1.0.0        # ✅ pinned version (replace with your release tag)
+          # image: user-service@sha256:<digest>  # ✅ even stronger, immutable digest
+          ports:
+            - containerPort: 50051
+          env:
+            # --- Postgres (TLS required; move to verify-full when CA is wired) ---
+            - name: POSTGRES_HOST
+              value: postgres
+            - name: POSTGRES_DB
+              value: user_platform
+            - name: PGSSLMODE
+              value: require
+
+            # --- Redis over TLS ---
+            - name: REDIS_URL
+              value: rediss://redis:6380
+
+            # --- Kafka over TLS ---
+            - name: KAFKA_BROKERS
+              value: kafka:9093
+            - name: KAFKA_TLS_ENABLED
+              value: "true"
+
+            # --- Vault over HTTPS ---
+            - name: VAULT_ADDR
+              value: https://vault:8200
+            - name: VAULT_CACERT
+              value: /etc/ssl/certs/ca.crt
+
+            # --- gRPC TLS (terminate TLS in-app) ---
+            - name: TLS_CERT_FILE
+              value: /etc/tls/server/tls.crt
+            - name: TLS_KEY_FILE
+              value: /etc/tls/server/tls.key
+
+          volumeMounts:
+            - name: trust-bundle
+              mountPath: /etc/ssl/certs
+              readOnly: true
+            - name: server-tls
+              mountPath: /etc/tls/server
+              readOnly: true
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+              ephemeral-storage: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+              ephemeral-storage: "1Gi"
+
+      volumes:
+        - name: trust-bundle
+          secret:
+            secretName: platform-ca-bundle   # CA(s) for trust
+            optional: false
+        - name: server-tls
+          secret:
+            secretName: user-service-tls     # tls.crt / tls.key
+            optional: false

@@ -1,0 +1,1 @@
+-- Rollback migration for user service (empty placeholder)

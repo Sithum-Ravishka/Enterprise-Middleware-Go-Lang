@@ -1,0 +1,214 @@
+swagger: "2.0"
+info:
+  version: "1.0.0"
+  title: "User Platform API"
+  description: |
+    This OpenAPI specification describes the HTTP interface exposed by the gateway
+    for the user platform. It provides endpoints for registering a user,
+    logging in, retrieving a profile, refreshing sessions, logging out and
+    streaming audit events via Server-Sent Events (SSE). All endpoints are
+    served over HTTPS in production. Error responses use a simple JSON object
+    with an `error` field containing a human readable message.
+
+host: "localhost:8080"
+basePath: "/"
+schemes:
+  - http
+
+consumes:
+  - application/json
+produces:
+  - application/json
+
+paths:
+  /v1/register:
+    post:
+      summary: Register a new user
+      description: |
+        Creates a new user account with the provided email, username and
+        password. Returns the generated user ID on success. The password
+        must be at least 12 characters long.
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            required:
+              - email
+              - username
+              - password
+            properties:
+              email:
+                type: string
+                format: email
+              username:
+                type: string
+              password:
+                type: string
+                format: password
+      responses:
+        200:
+          description: User registered
+          schema:
+            type: object
+            properties:
+              user_id:
+                type: string
+        400:
+          description: Validation error
+          schema:
+            $ref: '#/definitions/Error'
+
+  /v1/login:
+    post:
+      summary: Authenticate and obtain tokens
+      description: |
+        Authenticates a user using their email and password. Returns an
+        access token and a refresh token if the credentials are valid.
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            required:
+              - email
+              - password
+            properties:
+              email:
+                type: string
+                format: email
+              password:
+                type: string
+                format: password
+      responses:
+        200:
+          description: Login successful
+          schema:
+            type: object
+            properties:
+              access_token:
+                type: string
+              refresh_token:
+                type: string
+        401:
+          description: Invalid credentials
+          schema:
+            $ref: '#/definitions/Error'
+
+  /v1/profile/{user_id}:
+    get:
+      summary: Retrieve a user's profile
+      description: |
+        Retrieves the profile information for the user with the given ID.
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          type: string
+      responses:
+        200:
+          description: Profile retrieved
+          schema:
+            type: object
+            properties:
+              user_id:
+                type: string
+              email:
+                type: string
+              username:
+                type: string
+        404:
+          description: User not found
+          schema:
+            $ref: '#/definitions/Error'
+
+  /v1/refresh:
+    post:
+      summary: Refresh access and refresh tokens
+      description: |
+        Exchanges a valid refresh token for a new pair of access and
+        refresh tokens. The provided refresh token is revoked and cannot be
+        reused.
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            required:
+              - refresh_token
+            properties:
+              refresh_token:
+                type: string
+      responses:
+        200:
+          description: Tokens refreshed
+          schema:
+            type: object
+            properties:
+              access_token:
+                type: string
+              refresh_token:
+                type: string
+        401:
+          description: Invalid or expired refresh token
+          schema:
+            $ref: '#/definitions/Error'
+
+  /v1/logout:
+    post:
+      summary: Revoke a refresh token
+      description: |
+        Revokes the provided refresh token. This endpoint always responds
+        with 204 No Content to avoid revealing whether the token was valid.
+      parameters:
+        - in: body
+          name: body
+          required: true
+          schema:
+            type: object
+            required:
+              - refresh_token
+            properties:
+              refresh_token:
+                type: string
+      responses:
+        204:
+          description: Logout processed
+        400:
+          description: Invalid request
+          schema:
+            $ref: '#/definitions/Error'
+
+  /events:
+    get:
+      summary: Subscribe to audit events
+      description: |
+        Opens a Server-Sent Events stream that broadcasts audit events as
+        they occur. The response type is `text/event-stream`.
+      produces:
+        - text/event-stream
+      responses:
+        200:
+          description: Stream of audit events
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: |
+        Exposes Prometheus metrics for scraping. The response is in the
+        Prometheus text exposition format.
+      produces:
+        - text/plain
+      responses:
+        200:
+          description: Prometheus metrics
+
+definitions:
+  Error:
+    type: object
+    properties:
+      error:
+        type: string

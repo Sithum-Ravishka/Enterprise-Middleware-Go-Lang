@@ -1,0 +1,1 @@
+-- Initial migration for user service (empty placeholder)

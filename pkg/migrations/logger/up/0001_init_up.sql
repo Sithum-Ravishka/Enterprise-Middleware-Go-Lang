@@ -1,0 +1,1 @@
+-- Initial migration for logger service (empty placeholder)

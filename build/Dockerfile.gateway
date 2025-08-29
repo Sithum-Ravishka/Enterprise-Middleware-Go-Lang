@@ -1,0 +1,24 @@
+FROM golang:1.25.0-alpine3.21 AS builder
+WORKDIR /app
+
+# 1) Cache deps
+COPY go.mod go.sum ./
+# If you use workspaces, copy go.work as well:
+# COPY go.work ./
+RUN go mod download
+
+# 2) Copy only the sources needed to build
+COPY cmd/ cmd/
+COPY internal/ internal/
+COPY pkg/ pkg/
+COPY api/ api/
+
+# 3) Build
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /out/gateway ./cmd/gateway
+
+# Final (use versioned Distroless image)
+FROM gcr.io/distroless/base-debian12:nonroot   
+WORKDIR /
+COPY --from=builder /out/gateway /usr/local/bin/gateway
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/gateway"]

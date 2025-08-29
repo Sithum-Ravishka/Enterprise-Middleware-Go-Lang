@@ -35,7 +35,6 @@ A production-grade Go microservice project for user registration, login, auditin
 
 ## Build and start the services:
 
-## Build and Start the Services
 ```bash
     make docker
     docker-compose up -d

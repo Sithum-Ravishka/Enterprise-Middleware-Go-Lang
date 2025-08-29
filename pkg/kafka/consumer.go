@@ -1,11 +1,11 @@
 package kafka
 
 import (
-    "context"
-    "encoding/json"
+	"context"
+	"encoding/json"
 
-    "github.com/example/user-platform/pkg/concurrency"
-    "github.com/segmentio/kafka-go"
+	"github.com/example/user-platform/pkg/concurrency"
+	"github.com/segmentio/kafka-go"
 )
 
 // AuditConsumer consumes audit events from Kafka.

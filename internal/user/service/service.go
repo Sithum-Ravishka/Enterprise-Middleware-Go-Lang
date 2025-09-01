@@ -11,6 +11,7 @@ import (
 	db "github.com/example/user-platform/internal/user/sqlc/gen"
 	"github.com/example/user-platform/pkg/auth"
 	intErr "github.com/example/user-platform/pkg/errors"
+	"github.com/example/user-platform/pkg/trace"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
@@ -129,7 +130,9 @@ func keyByID(id uuid.UUID) string    { return "user:id:" + id.String() }
 
 // Register registers a new user.
 func (s *UserService) Register(ctx context.Context, email, username, password string) (string, error) {
-	reqID := "" // fetch from ctx if you propagate one
+	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod
+	reqID := meta.TraceID
+
 	if err := s.Validator.ValidateRegister(reqID, email, username, password); err != nil {
 		s.Log.Warn("register validation failed", zap.String("email", email), zap.Error(err))
 		return "", err
@@ -171,12 +174,12 @@ func (s *UserService) Register(ctx context.Context, email, username, password st
 	s.emitAudit(ctx,
 		id.String(),
 		"INFO",
-		"user.registered",
+		"user register successful",
 		"user-service",
-		"",                  // api_endpoint (not applicable here)
-		"",                  // http_method (not applicable here)
-		uuid.New().String(), // trace_id (formerly correlation_id)
-		"",                  // reason
+		meta.APIPath,
+		meta.HTTPMethod,
+		meta.TraceID,
+		"user-register", // reason
 	)
 
 	return id.String(), nil

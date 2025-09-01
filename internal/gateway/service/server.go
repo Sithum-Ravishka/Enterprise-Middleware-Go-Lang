@@ -11,6 +11,7 @@ import (
 	loggerpb "github.com/example/user-platform/api/gen/go/logger/v1"
 	userpb "github.com/example/user-platform/api/gen/go/user/v1"
 	"github.com/example/user-platform/internal/gateway/httpserver"
+	"github.com/example/user-platform/internal/user/service" // 👈 for AuditService
 	"github.com/example/user-platform/pkg/kafka"
 	"github.com/example/user-platform/pkg/sse"
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// RunHTTPServer starts the HTTP gateway (Gin + gRPC-gateway + SSE + Audit).
 func RunHTTPServer(ctx context.Context, httpAddr, userGRPC, loggerGRPC string, brokers []string) error {
 	// ── gRPC connections ───────────────────────────────
 	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
@@ -58,22 +60,25 @@ func RunHTTPServer(ctx context.Context, httpAddr, userGRPC, loggerGRPC string, b
 	}
 
 	opts := kafka.ConsumerOpts{
-		Brokers: brokers,
-		Topic:   kafka.UserAuditTopic,
-		GroupID: "gateway-group",
-		// optional tuning:
+		Brokers:  brokers,
+		Topic:    kafka.UserAuditTopic,
+		GroupID:  "gateway-group",
 		MinBytes: 1 << 10,  // 1KB
 		MaxBytes: 10 << 20, // 10MB
-		// DLQTopic: "user.audit.dlq.v1",
 	}
 
 	consumer := kafka.NewAuditConsumer(opts, handler, nil)
-	// Start launches its own goroutine; no need to wrap in another go-routine.
 	consumer.Start(ctx)
+
+	// ── Audit emitter (Kafka producer) ─────────────────
+	producer := kafka.NewProducer(brokers, kafka.ProducerOptions{
+		Topic: kafka.UserAuditTopic,
+	})
+	audit := service.NewAuditService(producer, nil)
 
 	// ── Gin router ─────────────────────────────────────
 	router := gin.Default()
-	httpserver.RegisterRoutes(router, userClient, hub, gwmux)
+	httpserver.RegisterRoutes(router, userClient, audit, hub, gwmux)
 
 	// ── HTTP server ────────────────────────────────────
 	srv := &http.Server{
@@ -94,6 +99,7 @@ func RunHTTPServer(ctx context.Context, httpAddr, userGRPC, loggerGRPC string, b
 			log.Printf("http shutdown: %v", err)
 		}
 		_ = consumer.Close()
+		_ = producer.Close()
 	}()
 
 	log.Printf("HTTP gateway (Gin) listening on %s", httpAddr)

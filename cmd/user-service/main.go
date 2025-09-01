@@ -1,3 +1,4 @@
+// cmd/user-service/main.go
 package main
 
 import (
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	userpb "github.com/example/user-platform/api/gen/go/user/v1"
-	loggeraudit "github.com/example/user-platform/internal/logger/service"
 	usergrpc "github.com/example/user-platform/internal/user/grpc"
 	userrepo "github.com/example/user-platform/internal/user/repo"
 	usersvc "github.com/example/user-platform/internal/user/service"
@@ -21,7 +21,6 @@ import (
 	"github.com/example/user-platform/pkg/log"
 	"github.com/example/user-platform/pkg/validation"
 
-	"github.com/gocql/gocql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -36,14 +35,12 @@ import (
 )
 
 const (
-	gracefulTimeout    = 10 * time.Second
-	pgConnectTimeout   = 5 * time.Second
-	pgQueryTimeout     = 5 * time.Second
-	cassConnectTimeout = 5 * time.Second
+	gracefulTimeout  = 10 * time.Second
+	pgConnectTimeout = 5 * time.Second
+	pgQueryTimeout   = 5 * time.Second
 )
 
 func main() {
-	// --- Logger ---
 	logger := log.NewLogger()
 	defer log.Sync(logger)
 
@@ -51,46 +48,41 @@ func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// -------------------------
-	// Vault-only configuration
-	// -------------------------
-	vaultAddr := "http://vault:8200" // adjust in your env
-	vaultToken := "root"             // use proper auth in prod
+	// ----- Vault config (no env) -----
+	vaultAddr := "http://vault:8200"
+	vaultToken := "root"
 	vaultTLS := &tls.Config{MinVersion: tls.VersionTLS12}
 
 	vcli, err := config.NewVaultClient(vaultAddr, vaultToken, vaultTLS)
 	if err != nil {
 		logger.Fatal("vault client init failed", zap.Error(err))
 	}
-
 	paths := config.DefaultKVPaths()
 	cfg, err := config.LoadConfigFromVault(rootCtx, vcli, paths)
 	if err != nil {
 		logger.Fatal("failed to load config from vault", zap.Error(err))
 	}
 
-	// --- Auth: Token Manager (Vault provides PEM CONTENTS) ---
+	// ----- Auth -----
 	privPath, err := writeTempPEM("jwt-priv", normalizePEM(cfg.JWTPrivateKeyPEM))
 	if err != nil {
 		logger.Fatal("write private pem", zap.Error(err))
 	}
 	defer os.Remove(privPath)
-
 	pubPath, err := writeTempPEM("jwt-pub", normalizePEM(cfg.JWTPublicKeyPEM))
 	if err != nil {
 		logger.Fatal("write public pem", zap.Error(err))
 	}
 	defer os.Remove(pubPath)
-
 	tm, err := auth.NewTokenManager(privPath, pubPath)
 	if err != nil {
 		logger.Fatal("failed to init token manager", zap.Error(err))
 	}
 
-	// --- Postgres (pgxpool with timeouts) ---
+	// ----- Postgres -----
 	pgCfg, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
-		logger.Fatal("invalid postgres DSN", zap.Error(err))
+		logger.Fatal("invalid postgres dsn", zap.Error(err))
 	}
 	pgCfg.MaxConns = 20
 	pgCfg.MinConns = 2
@@ -100,10 +92,9 @@ func main() {
 
 	pool, err := pgxpool.NewWithConfig(rootCtx, pgCfg)
 	if err != nil {
-		logger.Fatal("failed to create postgres pool", zap.Error(err))
+		logger.Fatal("create postgres pool", zap.Error(err))
 	}
 	defer pool.Close()
-
 	{
 		ctx, cancel := context.WithTimeout(rootCtx, pgConnectTimeout)
 		defer cancel()
@@ -111,34 +102,16 @@ func main() {
 			logger.Fatal("unable to ping postgres", zap.Error(err))
 		}
 	}
-	_ = pgQueryTimeout // reserved for per-call timeouts
+	_ = pgQueryTimeout
 
-	// --- Cassandra (optional) ---
-	var cassSession *gocql.Session
-	if hosts := cfg.CassandraHostList(); len(hosts) > 0 {
-		cluster := gocql.NewCluster(hosts...)
-		cluster.Keyspace = cfg.CassandraKeyspace
-		cluster.Consistency = gocql.Quorum
-		cluster.Timeout = cassConnectTimeout
-		cluster.ConnectTimeout = cassConnectTimeout
-		cluster.DisableInitialHostLookup = true
-		cluster.NumConns = 2
-		sess, err := cluster.CreateSession()
-		if err != nil {
-			logger.Fatal("failed to connect to cassandra", zap.Error(err))
-		}
-		cassSession = sess
-		defer cassSession.Close()
-	}
+	// ----- Kafka Producer (audit only; NO Cassandra here) -----
+	prod := kafka.NewProducer(cfg.KafkaBrokerList(), kafka.ProducerOptions{
+		Topic: kafka.UserAuditTopic, // "user.audit.v1"
+		// (other opts are fine to leave default)
+	})
+	defer prod.Close()
 
-	// --- Kafka Producer (audit) ---
-	producer := kafka.NewProducer(cfg.KafkaBrokerList(), kafka.UserAuditTopic)
-	defer producer.Close()
-
-	// --- Audit service (Cassandra optional, Kafka required) ---
-	auditSvc := loggeraudit.NewAuditService(producer, cassSession)
-
-	// --- Optional Redis cache ---
+	// ----- Optional Redis cache -----
 	var cache usersvc.Cache
 	var rdb *redis.Client
 	if cfg.RedisHost != "" {
@@ -148,7 +121,7 @@ func main() {
 		}
 		rdb = redis.NewClient(&redis.Options{
 			Addr:         addr,
-			Password:     cfg.RedisPass, // may be empty
+			Password:     cfg.RedisPass,
 			DB:           0,
 			DialTimeout:  800 * time.Millisecond,
 			ReadTimeout:  1 * time.Second,
@@ -156,7 +129,6 @@ func main() {
 			PoolSize:     32,
 			MinIdleConns: 4,
 		})
-		// Light health check; if it fails, proceed without cache.
 		ctx, cancel := context.WithTimeout(rootCtx, 1*time.Second)
 		if err := rdb.Ping(ctx).Err(); err != nil {
 			logger.Warn("redis not available; continuing without cache", zap.Error(err))
@@ -164,9 +136,8 @@ func main() {
 			rdb = nil
 		}
 		cancel()
-
 		if rdb != nil {
-			cache = NewRedisCache(rdb) // adapter that implements usersvc.Cache
+			cache = NewRedisCache(rdb)
 			logger.Info("redis cache enabled", zap.String("addr", addr))
 		}
 	}
@@ -176,30 +147,31 @@ func main() {
 		}
 	}()
 
-	// --- Repository + Validator + Domain Service ---
+	// ----- Repository + Validator + Domain Service -----
 	repository := userrepo.NewPostgresRepo(pool)
 	validator := validation.NewValidator()
+	usrSvc := usersvc.NewUserService(repository, tm, validator, logger, cache)
 
-	// NEW: pass logger + cache into service (updated signature)
-	usrSvc := usersvc.NewUserService(repository, auditSvc, tm, validator, logger, cache)
+	// ----- Wire audit emitter -----
+	auditSvc := usersvc.NewAuditService(prod, nil) // Cassandra session not used here
+	usrSvc.Audit = auditSvc
 
-	// --- gRPC server (+ health + reflection) ---
+	// ----- gRPC server (+ health + reflection) -----
 	grpcServer := newGRPCServer()
 	userpb.RegisterUserServiceServer(grpcServer, usergrpc.NewUserServer(usrSvc))
 
-	healthServer := health.NewServer()
-	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
-	healthpb.RegisterHealthServer(grpcServer, healthServer)
+	hs := health.NewServer()
+	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	healthpb.RegisterHealthServer(grpcServer, hs)
 	reflection.Register(grpcServer)
 
-	// --- Listen address ---
 	addr := normalizeListenAddr(cfg.UserServiceAddr, ":50051")
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		logger.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
 
-	// --- Serve ---
+	// Serve
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("user-service gRPC listening", zap.String("addr", addr))
@@ -208,7 +180,7 @@ func main() {
 		}
 	}()
 
-	// --- Graceful shutdown ---
+	// Graceful shutdown
 	select {
 	case <-rootCtx.Done():
 	case err := <-errCh:
@@ -220,11 +192,10 @@ func main() {
 		grpcServer.GracefulStop()
 		close(done)
 	}()
-
 	select {
 	case <-done:
 	case <-time.After(gracefulTimeout):
-		grpcServer.Stop() // force stop
+		grpcServer.Stop()
 	}
 
 	logger.Info("user-service shutdown complete")
@@ -252,7 +223,6 @@ func newGRPCServer() *grpc.Server {
 	)
 }
 
-// normalizeListenAddr returns a usable ":port" or "host:port".
 func normalizeListenAddr(cfgAddr, def string) string {
 	if cfgAddr == "" {
 		return def
@@ -269,7 +239,6 @@ func normalizeListenAddr(cfgAddr, def string) string {
 	return def
 }
 
-// normalizePEM converts escaped newlines and CRLF to real PEM newlines.
 func normalizePEM(s string) string {
 	t := strings.TrimSpace(s)
 	t = strings.ReplaceAll(t, "\r\n", "\n")
@@ -277,7 +246,6 @@ func normalizePEM(s string) string {
 	return t
 }
 
-// writeTempPEM writes PEM content to a 0600 temp file and returns its path.
 func writeTempPEM(prefix, pem string) (string, error) {
 	f, err := os.CreateTemp("", prefix+"-*.pem")
 	if err != nil {
@@ -300,9 +268,8 @@ func writeTempPEM(prefix, pem string) (string, error) {
 	return f.Name(), nil
 }
 
-/* ---------- tiny Redis cache adapter (inline for convenience) ---------- */
+/* ---------- tiny Redis cache adapter ---------- */
 
-// NewRedisCache returns a minimal adapter that satisfies usersvc.Cache.
 type RedisCache struct{ rdb *redis.Client }
 
 func NewRedisCache(rdb *redis.Client) *RedisCache { return &RedisCache{rdb: rdb} }

@@ -1,3 +1,4 @@
+// internal/user/service/service.go
 package service
 
 import (
@@ -7,7 +8,6 @@ import (
 	"encoding/json"
 	"time"
 
-	logger "github.com/example/user-platform/internal/logger/service"
 	db "github.com/example/user-platform/internal/user/sqlc/gen"
 	"github.com/example/user-platform/pkg/auth"
 	intErr "github.com/example/user-platform/pkg/errors"
@@ -75,13 +75,14 @@ func (v userCacheView) toUserRow() db.User {
 		CreatedAt:    pgTime(time.Unix(v.CreatedAt, 0)),
 		UpdatedAt:    pgTime(time.Unix(v.UpdatedAt, 0)),
 	}
+
 }
 
 /* =============== Service =============== */
 
 type UserService struct {
 	Repo      Repository
-	Audit     *logger.AuditService
+	Audit     AuditEmitter
 	TokenMng  *auth.TokenManager
 	Validator validator
 
@@ -96,13 +97,12 @@ type UserService struct {
 	limiterLRU *limiterPool
 }
 
-func NewUserService(repo Repository, audit *logger.AuditService, tm *auth.TokenManager, v validator, log *zap.Logger, cache Cache) *UserService {
+func NewUserService(repo Repository, tm *auth.TokenManager, v validator, log *zap.Logger, cache Cache) *UserService {
 	if log == nil {
 		log = zap.NewNop()
 	}
 	return &UserService{
 		Repo:       repo,
-		Audit:      audit,
 		TokenMng:   tm,
 		Validator:  v,
 		Log:        log,
@@ -168,8 +168,29 @@ func (s *UserService) Register(ctx context.Context, email, username, password st
 		_ = s.Cache.Del(ctx, keyByEmail(email), keyByID(id))
 	}
 
-	_ = s.Audit.Emit(ctx, id.String(), "user.registered", uuid.New().String(), map[string]any{"email": email})
+	s.emitAudit(ctx, id.String(), "user.registered", uuid.New().String(), map[string]any{"email": email})
+
 	return id.String(), nil
+}
+
+func (s *UserService) emitAudit(ctx context.Context, userID, eventType, corr string, payload map[string]any) {
+	if s.Audit == nil {
+		s.Log.Warn("audit service not configured; skipping emit",
+			zap.String("event", eventType), zap.String("user_id", userID))
+		return
+	}
+	// protect hot path from any panic inside downstream emit
+	defer func() {
+		if r := recover(); r != nil {
+			s.Log.Error("panic while emitting audit event",
+				zap.String("event", eventType), zap.Any("recover", r))
+		}
+	}()
+
+	if err := s.Audit.Emit(ctx, userID, eventType, corr, payload); err != nil {
+		s.Log.Warn("audit emit failed",
+			zap.String("event", eventType), zap.String("user_id", userID), zap.Error(err))
+	}
 }
 
 // Login authenticates a user and returns tokens.
@@ -214,7 +235,9 @@ func (s *UserService) Login(ctx context.Context, email, password string) (string
 		return "", "", intErr.StatusFromCode(intErr.ErrInternal, reqID)
 	}
 
-	_ = s.Audit.Emit(ctx, uuid.UUID(user.ID.Bytes).String(), "user.login.succeeded", uuid.New().String(), nil)
+	// SAFE: use helper (nil-safe + panic-guard)
+	s.emitAudit(ctx, uuid.UUID(user.ID.Bytes).String(), "user.login.succeeded", uuid.New().String(), nil)
+
 	return access, refresh, nil
 }
 
@@ -287,7 +310,9 @@ func (s *UserService) RefreshSession(ctx context.Context, refreshToken string) (
 		return "", "", intErr.StatusFromCode(intErr.ErrInternal, reqID)
 	}
 
-	_ = s.Audit.Emit(ctx, uuid.UUID(session.UserID.Bytes).String(), "user.session.refreshed", uuid.New().String(), nil)
+	// SAFE: use helper
+	s.emitAudit(ctx, uuid.UUID(session.UserID.Bytes).String(), "user.session.refreshed", uuid.New().String(), nil)
+
 	return access, newRefresh, nil
 }
 
@@ -305,7 +330,9 @@ func (s *UserService) Logout(ctx context.Context, refreshToken string) error {
 		return nil
 	}
 	_ = s.Repo.RevokeSession(ctx, uuid.UUID(sess.ID.Bytes))
-	_ = s.Audit.Emit(ctx, uuid.UUID(sess.UserID.Bytes).String(), "user.logout", uuid.New().String(), nil)
+
+	// SAFE: use helper
+	s.emitAudit(ctx, uuid.UUID(sess.UserID.Bytes).String(), "user.logout", uuid.New().String(), nil)
 	return nil
 }
 

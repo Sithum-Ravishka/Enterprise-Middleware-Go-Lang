@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -46,17 +47,29 @@ func RunHTTPServer(ctx context.Context, httpAddr, userGRPC, loggerGRPC string, b
 
 	// ── SSE hub + Kafka consumer ───────────────────────
 	hub := sse.NewHub()
-	consumer := kafka.NewAuditConsumer(
-		brokers,
-		kafka.UserAuditTopic,
-		"gateway-group",
-		2,
-		func(ctx context.Context, msg []byte) error {
-			hub.Broadcast(string(msg))
-			return nil
-		},
-	)
-	go func() { consumer.Start(ctx) }()
+	handler := func(ctx context.Context, evt kafka.AuditEvent) error {
+		// Re-emit the original event JSON to clients
+		b, err := json.Marshal(evt)
+		if err != nil {
+			return err
+		}
+		hub.Broadcast(string(b))
+		return nil
+	}
+
+	opts := kafka.ConsumerOpts{
+		Brokers: brokers,
+		Topic:   kafka.UserAuditTopic,
+		GroupID: "gateway-group",
+		// optional tuning:
+		MinBytes: 1 << 10,  // 1KB
+		MaxBytes: 10 << 20, // 10MB
+		// DLQTopic: "user.audit.dlq.v1",
+	}
+
+	consumer := kafka.NewAuditConsumer(opts, handler, nil)
+	// Start launches its own goroutine; no need to wrap in another go-routine.
+	consumer.Start(ctx)
 
 	// ── Gin router ─────────────────────────────────────
 	router := gin.Default()

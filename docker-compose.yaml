@@ -42,24 +42,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 90s
-
-  cassandra-init:
-    image: cassandra:5.0
-    depends_on:
-      cassandra:
-        condition: service_healthy
-    entrypoint: ["/bin/sh","-c"]
-    command:
-      - |
-        echo 'BOOTSTRAPPING CASSANDRA KEYSPACE...'
-        cqlsh cassandra 9042 -e "
-        CREATE KEYSPACE IF NOT EXISTS user_platform
-        WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
-        "
-        # optional tables here, e.g.:
-        # cqlsh cassandra 9042 -e "CREATE TABLE IF NOT EXISTS user_platform.audit_events (ts timeuuid PRIMARY KEY, event text);"
-        echo 'DONE'
-    restart: "no"
+      
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -78,6 +61,7 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     ports:
       - "9092:9092"
 

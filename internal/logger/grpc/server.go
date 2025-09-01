@@ -22,12 +22,16 @@ func (s *Server) WriteAudit(ctx context.Context, req *loggerpb.AuditEvent) (*log
 		return nil, status.Error(codes.Unavailable, "logger service unavailable")
 	}
 	ev := kafka.AuditEvent{
-		ID:            req.GetId(),
-		Timestamp:     req.GetTs(),
-		UserID:        req.GetUserId(),
-		EventType:     req.GetEventType(),
-		CorrelationID: req.GetCorrelationId(),
-		PayloadJSON:   req.GetPayloadJson(),
+		ID:          req.GetId(),
+		Timestamp:   req.GetTs(),
+		LogLevel:    req.GetLogLevel(),
+		Message:     req.GetMessage(),
+		ServiceName: req.GetServiceName(),
+		APIEndpoint: req.GetApiEndpoint(),
+		HTTPMethod:  req.GetHttpMethod(),
+		UserID:      req.GetUserId(),
+		TraceID:     req.GetTraceId(),
+		Reason:      req.GetReason(),
 	}
 	if err := s.svc.WriteAudit(ctx, ev); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())

@@ -10,7 +10,17 @@ import (
 )
 
 type AuditEmitter interface {
-	Emit(ctx context.Context, userID, eventType, correlationID string, payload map[string]any) error
+	// Emit a single audit log event using the new schema.
+	Emit(ctx context.Context,
+		userID string,
+		logLevel string,
+		message string,
+		serviceName string,
+		apiEndpoint string,
+		httpMethod string,
+		traceID string,
+		reason string,
+	) error
 }
 
 type AuditService struct {
@@ -22,28 +32,39 @@ func NewAuditService(producer *kafka.Producer, session any) *AuditService {
 	return &AuditService{producer: producer, sess: session}
 }
 
-func (a *AuditService) Emit(ctx context.Context, userID, eventType, correlationID string, payload map[string]any) error {
+func (a *AuditService) Emit(
+	ctx context.Context,
+	userID string,
+	logLevel string,
+	message string,
+	serviceName string,
+	apiEndpoint string,
+	httpMethod string,
+	traceID string,
+	reason string,
+) error {
 	if a == nil || a.producer == nil {
 		return nil
 	}
-	if correlationID == "" {
-		correlationID = uuid.NewString()
-	}
-	paybytes, err := json.Marshal(payload)
-	if err != nil {
-		paybytes = []byte("{}")
-	}
+
 	ev := kafka.AuditEvent{
-		ID:            uuid.NewString(),
-		Timestamp:     time.Now().Unix(),
-		UserID:        userID,
-		EventType:     eventType,
-		CorrelationID: correlationID,
-		PayloadJSON:   string(paybytes),
+		ID:          uuid.NewString(),  // uuid string (generated at producer)
+		Timestamp:   time.Now().Unix(), // unix seconds (UTC)
+		LogLevel:    logLevel,          // INFO|WARN|ERROR|DEBUG
+		Message:     message,
+		ServiceName: serviceName,
+		APIEndpoint: apiEndpoint,
+		HTTPMethod:  httpMethod,
+		UserID:      userID, // "Public-User" if unknown
+		TraceID:     traceID,
+		Reason:      reason,
 	}
+
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return err
 	}
+
+	// Use userID as the Kafka key (unchanged behavior)
 	return a.producer.Publish(ctx, []byte(userID), data)
 }

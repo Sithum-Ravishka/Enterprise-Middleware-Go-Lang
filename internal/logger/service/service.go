@@ -18,10 +18,14 @@ func NewLoggerService(sess *gocql.Session) (*LoggerService, error) {
 	cql := `CREATE TABLE IF NOT EXISTS audit_events (
         id text PRIMARY KEY,
         ts bigint,
+        log_level text,
+        message text,
+        service_name text,
+        api_endpoint text,
+        http_method text,
         user_id text,
-        event_type text,
-        correlation_id text,
-        payload_json text
+        trace_id text,
+        reason text
     )`
 	if err := ls.session.Query(cql).Exec(); err != nil {
 		return nil, err
@@ -34,8 +38,8 @@ func (s *LoggerService) WriteAudit(ctx context.Context, ev kafka.AuditEvent) err
 		return errors.New("logger service not initialized")
 	}
 	return s.session.Query(
-		`INSERT INTO audit_events (id, ts, user_id, event_type, correlation_id, payload_json)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-		ev.ID, ev.Timestamp, ev.UserID, ev.EventType, ev.CorrelationID, ev.PayloadJSON,
+		`INSERT INTO audit_events (id, ts, log_level, message, service_name, api_endpoint, http_method, user_id, trace_id, reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ev.ID, ev.Timestamp, ev.LogLevel, ev.Message, ev.ServiceName, ev.APIEndpoint, ev.HTTPMethod, ev.UserID, ev.TraceID, ev.Reason,
 	).WithContext(ctx).Exec()
 }

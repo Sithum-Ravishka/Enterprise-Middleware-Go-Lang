@@ -57,12 +57,16 @@ func (p *Producer) Close() error {
 }
 
 type AuditEvent struct {
-	ID            string `json:"id"`
-	Timestamp     int64  `json:"ts"`
-	UserID        string `json:"user_id"`
-	EventType     string `json:"event_type"`
-	CorrelationID string `json:"correlation_id"`
-	PayloadJSON   string `json:"payload_json"`
+	ID          string `json:"id"`        // uuid string (generated at producer)
+	Timestamp   int64  `json:"ts"`        // unix seconds (UTC)
+	LogLevel    string `json:"log_level"` // INFO|WARN|ERROR|DEBUG
+	Message     string `json:"message"`
+	ServiceName string `json:"service_name"`
+	APIEndpoint string `json:"api_endpoint"`
+	HTTPMethod  string `json:"http_method"`
+	UserID      string `json:"user_id"` // "Public-User" if unknown
+	TraceID     string `json:"trace_id"`
+	Reason      string `json:"reason"`
 }
 
 type ByteAuditConsumer struct {

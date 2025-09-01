@@ -168,28 +168,48 @@ func (s *UserService) Register(ctx context.Context, email, username, password st
 		_ = s.Cache.Del(ctx, keyByEmail(email), keyByID(id))
 	}
 
-	s.emitAudit(ctx, id.String(), "user.registered", uuid.New().String(), map[string]any{"email": email})
+	s.emitAudit(ctx,
+		id.String(),
+		"INFO",
+		"user.registered",
+		"user-service",
+		"",                  // api_endpoint (not applicable here)
+		"",                  // http_method (not applicable here)
+		uuid.New().String(), // trace_id (formerly correlation_id)
+		"",                  // reason
+	)
 
 	return id.String(), nil
 }
 
-func (s *UserService) emitAudit(ctx context.Context, userID, eventType, corr string, payload map[string]any) {
+// Updated helper for new audit schema
+func (s *UserService) emitAudit(
+	ctx context.Context,
+	userID string,
+	logLevel string,
+	message string,
+	serviceName string,
+	apiEndpoint string,
+	httpMethod string,
+	traceID string,
+	reason string,
+) {
 	if s.Audit == nil {
 		s.Log.Warn("audit service not configured; skipping emit",
-			zap.String("event", eventType), zap.String("user_id", userID))
+			zap.String("event", message), zap.String("user_id", userID))
 		return
 	}
 	// protect hot path from any panic inside downstream emit
 	defer func() {
 		if r := recover(); r != nil {
 			s.Log.Error("panic while emitting audit event",
-				zap.String("event", eventType), zap.Any("recover", r))
+				zap.String("event", message), zap.Any("recover", r))
 		}
 	}()
 
-	if err := s.Audit.Emit(ctx, userID, eventType, corr, payload); err != nil {
+	if err := s.Audit.Emit(ctx, userID, logLevel, message, serviceName, apiEndpoint, httpMethod, traceID, reason); err != nil {
 		s.Log.Warn("audit emit failed",
-			zap.String("event", eventType), zap.String("user_id", userID), zap.Error(err))
+			zap.String("event", message), zap.String("user_id", userID), zap.Error(err))
 	}
 }
 
@@ -236,7 +256,16 @@ func (s *UserService) Login(ctx context.Context, email, password string) (string
 	}
 
 	// SAFE: use helper (nil-safe + panic-guard)
-	s.emitAudit(ctx, uuid.UUID(user.ID.Bytes).String(), "user.login.succeeded", uuid.New().String(), nil)
+	s.emitAudit(ctx,
+		uuid.UUID(user.ID.Bytes).String(),
+		"INFO",
+		"user.login.succeeded",
+		"user-service",
+		"",                  // api_endpoint
+		"",                  // http_method
+		uuid.New().String(), // trace_id
+		"",                  // reason
+	)
 
 	return access, refresh, nil
 }
@@ -311,7 +340,16 @@ func (s *UserService) RefreshSession(ctx context.Context, refreshToken string) (
 	}
 
 	// SAFE: use helper
-	s.emitAudit(ctx, uuid.UUID(session.UserID.Bytes).String(), "user.session.refreshed", uuid.New().String(), nil)
+	s.emitAudit(ctx,
+		uuid.UUID(session.UserID.Bytes).String(),
+		"INFO",
+		"user.session.refreshed",
+		"user-service",
+		"",                  // api_endpoint
+		"",                  // http_method
+		uuid.New().String(), // trace_id
+		"",                  // reason
+	)
 
 	return access, newRefresh, nil
 }
@@ -332,7 +370,16 @@ func (s *UserService) Logout(ctx context.Context, refreshToken string) error {
 	_ = s.Repo.RevokeSession(ctx, uuid.UUID(sess.ID.Bytes))
 
 	// SAFE: use helper
-	s.emitAudit(ctx, uuid.UUID(sess.UserID.Bytes).String(), "user.logout", uuid.New().String(), nil)
+	s.emitAudit(ctx,
+		uuid.UUID(sess.UserID.Bytes).String(),
+		"INFO",
+		"user.logout",
+		"user-service",
+		"",                  // api_endpoint
+		"",                  // http_method
+		uuid.New().String(), // trace_id
+		"",                  // reason
+	)
 	return nil
 }
 

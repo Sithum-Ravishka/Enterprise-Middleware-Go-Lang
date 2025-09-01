@@ -21,15 +21,19 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Audit event message.
+// Audit event message (new schema).
 type AuditEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Ts            int64                  `protobuf:"varint,2,opt,name=ts,proto3" json:"ts,omitempty"`
-	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	EventType     string                 `protobuf:"bytes,4,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
-	CorrelationId string                 `protobuf:"bytes,5,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
-	PayloadJson   string                 `protobuf:"bytes,6,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                             // uuid string (generated at producer)
+	Ts            int64                  `protobuf:"varint,2,opt,name=ts,proto3" json:"ts,omitempty"`                            // unix seconds (UTC)
+	LogLevel      string                 `protobuf:"bytes,3,opt,name=log_level,json=logLevel,proto3" json:"log_level,omitempty"` // INFO|WARN|ERROR|DEBUG
+	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	ServiceName   string                 `protobuf:"bytes,5,opt,name=service_name,json=serviceName,proto3" json:"service_name,omitempty"`
+	ApiEndpoint   string                 `protobuf:"bytes,6,opt,name=api_endpoint,json=apiEndpoint,proto3" json:"api_endpoint,omitempty"`
+	HttpMethod    string                 `protobuf:"bytes,7,opt,name=http_method,json=httpMethod,proto3" json:"http_method,omitempty"`
+	UserId        string                 `protobuf:"bytes,8,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"` // "Public-User" if unknown
+	TraceId       string                 `protobuf:"bytes,9,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,10,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -78,6 +82,41 @@ func (x *AuditEvent) GetTs() int64 {
 	return 0
 }
 
+func (x *AuditEvent) GetLogLevel() string {
+	if x != nil {
+		return x.LogLevel
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetServiceName() string {
+	if x != nil {
+		return x.ServiceName
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetApiEndpoint() string {
+	if x != nil {
+		return x.ApiEndpoint
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetHttpMethod() string {
+	if x != nil {
+		return x.HttpMethod
+	}
+	return ""
+}
+
 func (x *AuditEvent) GetUserId() string {
 	if x != nil {
 		return x.UserId
@@ -85,23 +124,16 @@ func (x *AuditEvent) GetUserId() string {
 	return ""
 }
 
-func (x *AuditEvent) GetEventType() string {
+func (x *AuditEvent) GetTraceId() string {
 	if x != nil {
-		return x.EventType
+		return x.TraceId
 	}
 	return ""
 }
 
-func (x *AuditEvent) GetCorrelationId() string {
+func (x *AuditEvent) GetReason() string {
 	if x != nil {
-		return x.CorrelationId
-	}
-	return ""
-}
-
-func (x *AuditEvent) GetPayloadJson() string {
-	if x != nil {
-		return x.PayloadJson
+		return x.Reason
 	}
 	return ""
 }
@@ -154,16 +186,21 @@ var File_logger_v1_logger_proto protoreflect.FileDescriptor
 
 const file_logger_v1_logger_proto_rawDesc = "" +
 	"\n" +
-	"\x16logger/v1/logger.proto\x12\tlogger.v1\"\xae\x01\n" +
+	"\x16logger/v1/logger.proto\x12\tlogger.v1\"\x96\x02\n" +
 	"\n" +
 	"AuditEvent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x0e\n" +
-	"\x02ts\x18\x02 \x01(\x03R\x02ts\x12\x17\n" +
-	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x1d\n" +
-	"\n" +
-	"event_type\x18\x04 \x01(\tR\teventType\x12%\n" +
-	"\x0ecorrelation_id\x18\x05 \x01(\tR\rcorrelationId\x12!\n" +
-	"\fpayload_json\x18\x06 \x01(\tR\vpayloadJson\".\n" +
+	"\x02ts\x18\x02 \x01(\x03R\x02ts\x12\x1b\n" +
+	"\tlog_level\x18\x03 \x01(\tR\blogLevel\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12!\n" +
+	"\fservice_name\x18\x05 \x01(\tR\vserviceName\x12!\n" +
+	"\fapi_endpoint\x18\x06 \x01(\tR\vapiEndpoint\x12\x1f\n" +
+	"\vhttp_method\x18\a \x01(\tR\n" +
+	"httpMethod\x12\x17\n" +
+	"\auser_id\x18\b \x01(\tR\x06userId\x12\x19\n" +
+	"\btrace_id\x18\t \x01(\tR\atraceId\x12\x16\n" +
+	"\x06reason\x18\n" +
+	" \x01(\tR\x06reason\".\n" +
 	"\x12WriteAuditResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess2S\n" +
 	"\rLoggerService\x12B\n" +

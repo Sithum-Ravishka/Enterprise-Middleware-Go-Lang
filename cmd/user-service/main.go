@@ -150,7 +150,13 @@ func main() {
 	// ----- Repository + Validator + Domain Service -----
 	repository := userrepo.NewPostgresRepo(pool)
 	validator := validation.NewValidator()
-	usrSvc := usersvc.NewUserService(repository, tm, validator, logger, cache)
+	// Create a Kafka producer for realtime events
+	eventProducer := kafka.NewProducer(cfg.KafkaBrokerList(), kafka.ProducerOptions{
+		Topic: "user.events.v1",
+	})
+	defer eventProducer.Close()
+
+	usrSvc := usersvc.NewUserService(repository, tm, validator, logger, cache, eventProducer)
 
 	// ----- Wire audit emitter -----
 	auditSvc := usersvc.NewAuditService(prod, nil) // Cassandra session not used here

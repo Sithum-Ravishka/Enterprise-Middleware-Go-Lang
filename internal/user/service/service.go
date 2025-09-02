@@ -11,6 +11,7 @@ import (
 	db "github.com/example/user-platform/internal/user/sqlc/gen"
 	"github.com/example/user-platform/pkg/auth"
 	intErr "github.com/example/user-platform/pkg/errors"
+	"github.com/example/user-platform/pkg/kafka"
 	"github.com/example/user-platform/pkg/trace"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -88,8 +89,9 @@ type UserService struct {
 	Validator validator
 
 	// New bits
-	Log   *zap.Logger
-	Cache Cache
+	Log           *zap.Logger
+	Cache         Cache
+	EventProducer *kafka.Producer
 
 	sf singleflight.Group
 
@@ -98,17 +100,18 @@ type UserService struct {
 	limiterLRU *limiterPool
 }
 
-func NewUserService(repo Repository, tm *auth.TokenManager, v validator, log *zap.Logger, cache Cache) *UserService {
+func NewUserService(repo Repository, tm *auth.TokenManager, v validator, log *zap.Logger, cache Cache, eventProducer *kafka.Producer) *UserService {
 	if log == nil {
 		log = zap.NewNop()
 	}
 	return &UserService{
-		Repo:       repo,
-		TokenMng:   tm,
-		Validator:  v,
-		Log:        log,
-		Cache:      cache,
-		limiterLRU: newLimiterPool(10*time.Minute, 100_000), // keep hottest 100k keys
+		Repo:          repo,
+		TokenMng:      tm,
+		Validator:     v,
+		Log:           log,
+		Cache:         cache,
+		EventProducer: eventProducer,
+		limiterLRU:    newLimiterPool(10*time.Minute, 100_000),
 	}
 }
 
@@ -128,9 +131,8 @@ const (
 func keyByEmail(email string) string { return "user:email:" + email }
 func keyByID(id uuid.UUID) string    { return "user:id:" + id.String() }
 
-// Register registers a new user.
 func (s *UserService) Register(ctx context.Context, email, username, password string) (string, error) {
-	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod
+	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod, ClientID
 	reqID := meta.TraceID
 
 	if err := s.Validator.ValidateRegister(reqID, email, username, password); err != nil {
@@ -138,21 +140,40 @@ func (s *UserService) Register(ctx context.Context, email, username, password st
 		return "", err
 	}
 
-	// Hash password (cost configured in auth pkg)
+	// Hash password
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		s.Log.Error("hash password failed", zap.Error(err))
 		return "", intErr.StatusFromCode(intErr.ErrInternal, reqID)
 	}
 
-	// Existence check by email (hit cache first)
+	// Check existence
 	if _, err := s.getUserByEmail(ctx, email); err == nil {
 		return "", intErr.StatusFromCode(intErr.ErrEmailInUse, reqID)
 	}
 
-	// Create
+	// Generate new ID
 	id := uuid.New()
 	now := time.Now()
+
+	// ---- SSE "start" event ----
+	startEvent := map[string]any{
+		"event":       "user.register.start",
+		"user_id":     id.String(),
+		"email":       email,
+		"username":    username,
+		"trace_id":    meta.TraceID,
+		"client_id":   meta.ClientID,
+		"service":     "user-service",
+		"occurred_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if s.EventProducer != nil {
+		if b, err := json.Marshal(startEvent); err == nil {
+			_ = s.EventProducer.Publish(ctx, []byte(meta.ClientID), b)
+		}
+	}
+
+	// Insert user
 	u := db.User{
 		ID:           pgUUID(id),
 		Email:        email,
@@ -166,11 +187,31 @@ func (s *UserService) Register(ctx context.Context, email, username, password st
 		return "", intErr.StatusFromCode(intErr.ErrInternal, reqID)
 	}
 
-	// Invalidate any stale cache keys (best-effort)
+	// Invalidate any stale cache
 	if s.Cache != nil {
 		_ = s.Cache.Del(ctx, keyByEmail(email), keyByID(id))
 	}
 
+	// ---- SSE "done" event ----
+	doneEvent := map[string]any{
+		"event":       "user.register.done",
+		"user_id":     id.String(),
+		"email":       email,
+		"username":    username,
+		"trace_id":    meta.TraceID,
+		"client_id":   meta.ClientID,
+		"service":     "user-service",
+		"occurred_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if s.EventProducer != nil {
+		if b, err := json.Marshal(doneEvent); err == nil {
+			if err := s.EventProducer.Publish(ctx, []byte(meta.ClientID), b); err != nil {
+				s.Log.Warn("failed to publish register.done", zap.Error(err))
+			}
+		}
+	}
+
+	// Audit
 	s.emitAudit(ctx,
 		id.String(),
 		"INFO",
@@ -179,7 +220,7 @@ func (s *UserService) Register(ctx context.Context, email, username, password st
 		meta.APIPath,
 		meta.HTTPMethod,
 		meta.TraceID,
-		"user-register", // reason
+		"user-register",
 	)
 
 	return id.String(), nil
@@ -218,7 +259,8 @@ func (s *UserService) emitAudit(
 
 // Login authenticates a user and returns tokens.
 func (s *UserService) Login(ctx context.Context, email, password string) (string, string, error) {
-	reqID := ""
+	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod
+	reqID := meta.TraceID
 
 	// Per-email rate limit (e.g., 5 req/s burst 10 for login)
 	lim := s.limiterLRU.Get(email, rate.Every(200*time.Millisecond), 10)
@@ -264,10 +306,10 @@ func (s *UserService) Login(ctx context.Context, email, password string) (string
 		"INFO",
 		"user.login.succeeded",
 		"user-service",
-		"",                  // api_endpoint
-		"",                  // http_method
-		uuid.New().String(), // trace_id
-		"",                  // reason
+		meta.APIPath,
+		meta.HTTPMethod,
+		meta.TraceID,
+		"user-login", // reason
 	)
 
 	return access, refresh, nil
@@ -275,7 +317,8 @@ func (s *UserService) Login(ctx context.Context, email, password string) (string
 
 // GetProfile returns user profile by ID (cached).
 func (s *UserService) GetProfile(ctx context.Context, userID string) (db.User, error) {
-	reqID := ""
+	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod
+	reqID := meta.TraceID
 
 	id, err := uuid.Parse(userID)
 	if err != nil {
@@ -292,7 +335,8 @@ func (s *UserService) GetProfile(ctx context.Context, userID string) (db.User, e
 
 // RefreshSession rotates the refresh token and returns a new pair of tokens.
 func (s *UserService) RefreshSession(ctx context.Context, refreshToken string) (string, string, error) {
-	reqID := ""
+	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod
+	reqID := meta.TraceID
 
 	// Verify token and extract subject (user ID)
 	userID, err := s.TokenMng.Verify(refreshToken)
@@ -348,10 +392,10 @@ func (s *UserService) RefreshSession(ctx context.Context, refreshToken string) (
 		"INFO",
 		"user.session.refreshed",
 		"user-service",
-		"",                  // api_endpoint
-		"",                  // http_method
-		uuid.New().String(), // trace_id
-		"",                  // reason
+		meta.APIPath,
+		meta.HTTPMethod,
+		meta.TraceID,
+		"", // reason
 	)
 
 	return access, newRefresh, nil
@@ -359,6 +403,7 @@ func (s *UserService) RefreshSession(ctx context.Context, refreshToken string) (
 
 // Logout revokes the session for the provided refresh token.
 func (s *UserService) Logout(ctx context.Context, refreshToken string) error {
+	meta := trace.ExtractFromIncoming(ctx) // TraceID, APIPath, HTTPMethod
 	// Verify signature but ignore error to avoid leaking info.
 	_, _ = s.TokenMng.Verify(refreshToken)
 
@@ -378,10 +423,10 @@ func (s *UserService) Logout(ctx context.Context, refreshToken string) error {
 		"INFO",
 		"user.logout",
 		"user-service",
-		"",                  // api_endpoint
-		"",                  // http_method
-		uuid.New().String(), // trace_id
-		"",                  // reason
+		meta.APIPath,
+		meta.HTTPMethod,
+		meta.TraceID,
+		"user-logout", // reason
 	)
 	return nil
 }

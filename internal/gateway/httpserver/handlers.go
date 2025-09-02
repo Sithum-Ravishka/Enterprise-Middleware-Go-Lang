@@ -19,6 +19,7 @@ func healthHandler() gin.HandlerFunc {
 func registerHandler(userClient userpb.UserServiceClient, audit AuditEmitter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		traceID := getTraceID(c)
+		clientID := getClientID(c) // 👈 new
 
 		var body struct {
 			Email    string `json:"email"`
@@ -33,8 +34,14 @@ func registerHandler(userClient userpb.UserServiceClient, audit AuditEmitter) gi
 			return
 		}
 
-		// 👇 inject into outgoing gRPC metadata (trace_id, api_endpoint, http_method)
-		ctx := trace.InjectToOutgoing(c.Request.Context(), traceID, c.FullPath(), c.Request.Method)
+		// 👇 inject trace_id + client_id into gRPC metadata
+		ctx := trace.InjectToOutgoing(
+			c.Request.Context(),
+			traceID,
+			c.FullPath(),
+			c.Request.Method,
+			clientID,
+		)
 
 		resp, err := userClient.Register(ctx, &userpb.RegisterRequest{
 			Email:    body.Email,
@@ -53,8 +60,14 @@ func registerHandler(userClient userpb.UserServiceClient, audit AuditEmitter) gi
 			resp.GetUserId(), "INFO", "user register successful",
 			"gateway-service", c.FullPath(), c.Request.Method, traceID, "user-register")
 
+		// 👇 include IDs in response headers (so frontend can open SSE immediately)
+		c.Header("X-Trace-Id", traceID)
+		c.Header("X-Client-Id", clientID)
+
 		intErr.JSONSuccess(c, http.StatusOK, "User registered successfully", gin.H{
-			"user_id": resp.GetUserId(),
+			"user_id":   resp.GetUserId(),
+			"trace_id":  traceID,
+			"client_id": clientID,
 		})
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/example/user-platform/internal/gateway/service"
+	"github.com/example/user-platform/pkg/sse"
 )
 
 type config struct {
@@ -25,25 +26,33 @@ type config struct {
 func main() {
 	cfg := loadConfig()
 
-	// Context cancels automatically on SIGINT/SIGTERM
+	// Root context cancels automatically on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Run server; exit on first error or signal
 	grp, ctx := errgroup.WithContext(ctx)
+
+	// Shared SSE hub (used by HTTP routes and EventBridge)
+	hub := sse.NewHub()
+
+	// Run HTTP server
 	grp.Go(func() error {
-		return service.RunHTTPServer(ctx, cfg.httpAddr, cfg.userGRPC, cfg.loggerGRPC, cfg.brokers)
+		return service.RunHTTPServer(ctx, cfg.httpAddr, cfg.userGRPC, cfg.loggerGRPC, cfg.brokers, hub)
 	})
 
-	// Wait until a signal or server error
+	// Run EventBridge (consume Kafka → SSE hub)
+	grp.Go(func() error {
+		return service.RunEventBridge(ctx, hub, cfg.brokers)
+	})
+
+	// Wait until error or signal
 	if err := grp.Wait(); err != nil && !isContextCanceled(ctx) {
-		log.Printf("gateway http server exited with error: %v", err)
+		log.Printf("gateway exited with error: %v", err)
 	}
 
-	// Give background work up to 10s to honor ctx cancel
+	// Graceful shutdown
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
 	<-shutdownCtx.Done()
 	if shutdownCtx.Err() == context.DeadlineExceeded {
 		log.Println("forced shutdown after timeout")
@@ -70,7 +79,6 @@ func loadConfig() config {
 
 	flag.Parse()
 
-	// If brokers flag wasn’t provided, derive from env/default
 	if len(cfg.brokers) == 0 {
 		cfg.brokers = splitAndTrimOrDefault(brokersDefault, brokersDefault)
 	}
@@ -92,7 +100,7 @@ func splitAndTrimOrDefault(input, def string) []string {
 		s = def
 	}
 	parts := strings.Split(s, ",")
-	out := outPool(parts) // pre-size result
+	out := outPool(parts)
 	for _, p := range parts {
 		if v := strings.TrimSpace(p); v != "" {
 			out = append(out, v)
@@ -101,9 +109,7 @@ func splitAndTrimOrDefault(input, def string) []string {
 	return out
 }
 
-// outPool preallocates with a likely-good capacity to reduce reallocations.
 func outPool(parts []string) []string {
-	// Assume at least half survive trimming; adjust as needed.
 	capacity := len(parts)
 	if capacity < 4 {
 		capacity = 4

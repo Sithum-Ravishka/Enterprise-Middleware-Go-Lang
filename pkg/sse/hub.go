@@ -5,61 +5,62 @@ import (
 	"sync"
 )
 
-// Hub manages SSE clients and broadcasts events.
 type Hub struct {
 	mu      sync.RWMutex
-	clients map[chan string]struct{}
+	clients map[string]map[chan string]struct{} // clientID → set of channels
 }
 
-// NewHub creates a new Hub.
 func NewHub() *Hub {
-	return &Hub{
-		clients: make(map[chan string]struct{}),
-	}
+	return &Hub{clients: make(map[string]map[chan string]struct{})}
 }
 
-// Subscribe registers a new client and returns a channel to read events.
-func (h *Hub) Subscribe() chan string {
+// Subscribe adds a client for a given clientID.
+func (h *Hub) Subscribe(clientID string) chan string {
 	ch := make(chan string, 10)
 	h.mu.Lock()
-	h.clients[ch] = struct{}{}
-	h.mu.Unlock()
+	defer h.mu.Unlock()
+	if h.clients[clientID] == nil {
+		h.clients[clientID] = make(map[chan string]struct{})
+	}
+	h.clients[clientID][ch] = struct{}{}
 	return ch
 }
 
-// Unsubscribe removes a client.
-func (h *Hub) Unsubscribe(ch chan string) {
+// Unsubscribe removes a client for a clientID.
+func (h *Hub) Unsubscribe(clientID string, ch chan string) {
 	h.mu.Lock()
-	if _, ok := h.clients[ch]; ok {
-		delete(h.clients, ch)
+	defer h.mu.Unlock()
+	if set, ok := h.clients[clientID]; ok {
+		delete(set, ch)
 		close(ch)
+		if len(set) == 0 {
+			delete(h.clients, clientID)
+		}
 	}
-	h.mu.Unlock()
 }
 
-// Publish sends an event to all clients (non-blocking per client).
-func (h *Hub) Publish(event string) {
+// Publish sends event to all clients of this clientID.
+func (h *Hub) Publish(clientID, event string) {
 	h.mu.RLock()
-	for ch := range h.clients {
+	set := h.clients[clientID]
+	h.mu.RUnlock()
+	if set == nil {
+		return
+	}
+	for ch := range set {
 		select {
 		case ch <- event:
 		default:
-			// Drop if client is slow; keeps hub healthy under backpressure.
+			// drop if client is slow
 		}
 	}
-	h.mu.RUnlock()
 }
 
-// Broadcast is kept for backward compatibility; it delegates to Publish.
-func (h *Hub) Broadcast(s string) {
-	h.Publish(s)
-}
-
-// Optional utility: publish with context (timeouts, cancel).
-func (h *Hub) PublishCtx(ctx context.Context, event string) {
+// Optional safe publish with context.
+func (h *Hub) PublishCtx(ctx context.Context, clientID, event string) {
 	done := make(chan struct{}, 1)
 	go func() {
-		h.Publish(event)
+		h.Publish(clientID, event)
 		done <- struct{}{}
 	}()
 	select {

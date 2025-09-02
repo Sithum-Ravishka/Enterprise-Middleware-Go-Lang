@@ -20,8 +20,26 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// publishAuditToSSE publishes a Kafka audit event into the SSE hub (per trace_id).
+func publishAuditToSSE(h *sse.Hub, evt kafka.AuditEvent) error {
+	if h == nil {
+		return nil
+	}
+	b, err := json.Marshal(evt)
+	if err != nil {
+		return err
+	}
+	h.Publish(evt.TraceID, string(b))
+	return nil
+}
+
 // RunHTTPServer starts the HTTP gateway (Gin + gRPC-gateway + SSE + Audit).
-func RunHTTPServer(ctx context.Context, httpAddr, userGRPC, loggerGRPC string, brokers []string) error {
+func RunHTTPServer(
+	ctx context.Context,
+	httpAddr, userGRPC, loggerGRPC string,
+	brokers []string,
+	hub *sse.Hub, // 👈 use the hub from main.go
+) error {
 	// ── gRPC connections ───────────────────────────────
 	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 
@@ -47,16 +65,9 @@ func RunHTTPServer(ctx context.Context, httpAddr, userGRPC, loggerGRPC string, b
 		return fmt.Errorf("register logger handler: %w", err)
 	}
 
-	// ── SSE hub + Kafka consumer ───────────────────────
-	hub := sse.NewHub()
+	// ── Kafka consumer (Audit) → SSE ───────────────────
 	handler := func(ctx context.Context, evt kafka.AuditEvent) error {
-		// Re-emit the original event JSON to clients
-		b, err := json.Marshal(evt)
-		if err != nil {
-			return err
-		}
-		hub.Broadcast(string(b))
-		return nil
+		return publishAuditToSSE(hub, evt) // 👈 publish into the shared hub
 	}
 
 	opts := kafka.ConsumerOpts{

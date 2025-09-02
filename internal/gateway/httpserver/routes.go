@@ -8,7 +8,6 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 )
 
-// RegisterRoutes attaches all HTTP endpoints.
 func RegisterRoutes(
 	router *gin.Engine,
 	userClient userpb.UserServiceClient,
@@ -19,11 +18,12 @@ func RegisterRoutes(
 	// tracing middleware
 	router.Use(TraceMiddleware())
 
-	// CORS
+	// CORS (add X-Client-Id)
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-Id")
+		c.Writer.Header().Set("Access-Control-Allow-Headers",
+			"Origin, Content-Type, Authorization, X-Trace-Id, X-Client-Id")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -34,7 +34,7 @@ func RegisterRoutes(
 	// health
 	router.GET("/healthz", healthHandler())
 
-	// SSE events
+	// SSE (trace-aware handler reads ?trace_id=...; your hub should be per-trace/client)
 	router.GET("/events", gin.WrapH(sse.Handler(hub)))
 
 	// user endpoints

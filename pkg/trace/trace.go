@@ -10,17 +10,19 @@ const (
 	MetaTraceID    = "x-trace-id"
 	MetaAPIPath    = "x-api-endpoint"
 	MetaHTTPMethod = "x-http-method"
+	MetaClientID   = "x-client-id" // 👈 new
 )
 
 type Meta struct {
 	TraceID    string
 	APIPath    string
 	HTTPMethod string
+	ClientID   string // 👈 new
 }
 
 // InjectToOutgoing adds the tracing fields to outgoing gRPC metadata.
-func InjectToOutgoing(ctx context.Context, traceID, apiPath, httpMethod string) context.Context {
-	if traceID == "" && apiPath == "" && httpMethod == "" {
+func InjectToOutgoing(ctx context.Context, traceID, apiPath, httpMethod, clientID string) context.Context {
+	if traceID == "" && apiPath == "" && httpMethod == "" && clientID == "" {
 		return ctx
 	}
 	pairs := []string{}
@@ -32,6 +34,9 @@ func InjectToOutgoing(ctx context.Context, traceID, apiPath, httpMethod string) 
 	}
 	if httpMethod != "" {
 		pairs = append(pairs, MetaHTTPMethod, httpMethod)
+	}
+	if clientID != "" {
+		pairs = append(pairs, MetaClientID, clientID)
 	}
 	return metadata.AppendToOutgoingContext(ctx, pairs...)
 }
@@ -48,6 +53,9 @@ func ExtractFromIncoming(ctx context.Context) Meta {
 		}
 		if v := md.Get(MetaHTTPMethod); len(v) > 0 {
 			m.HTTPMethod = v[0]
+		}
+		if v := md.Get(MetaClientID); len(v) > 0 {
+			m.ClientID = v[0]
 		}
 	}
 	return m

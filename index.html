@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SSE Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2rem;
+      background: #f9f9f9;
+    }
+    h1 {
+      font-size: 1.5rem;
+    }
+    #log {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fff;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Server-Sent Events Demo</h1>
+
+  <div>
+    <label for="trace">Trace ID:</label>
+    <input id="trace" type="text" placeholder="paste your trace_id here" size="40">
+    <button id="connect">Connect</button>
+  </div>
+
+  <div id="status" style="margin-top: 1rem; font-weight: bold; color: green;">
+    Not connected
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    let es; // global
+
+    function appendLog(msg) {
+      const log = document.getElementById('log');
+      const el = document.createElement('div');
+      el.textContent = msg;
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    document.getElementById('connect').addEventListener('click', () => {
+      const traceId = document.getElementById('trace').value.trim();
+      if (!traceId) {
+        alert("Please enter a trace_id first!");
+        return;
+      }
+
+      if (es) {
+        es.close();
+      }
+
+      const backendBase = "http://localhost:8080"; // 👈 change if your Go backend runs on a different port
+      es = new EventSource(`${backendBase}/events?trace_id=${traceId}`);
+
+      es.onopen = () => {
+        document.getElementById('status').textContent = `Connected with trace_id=${traceId}`;
+        document.getElementById('status').style.color = "green";
+        appendLog(`✅ Connected with trace_id=${traceId}`);
+      };
+
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          appendLog("📩 " + JSON.stringify(data, null, 2));
+        } catch (err) {
+          appendLog("📩 " + event.data);
+        }
+      };
+
+      es.onerror = (err) => {
+        document.getElementById('status').textContent = "Connection error (check server logs)";
+        document.getElementById('status').style.color = "red";
+        appendLog("❌ SSE error: " + JSON.stringify(err));
+        es.close();
+      };
+    });
+  </script>
+</body>
+</html>
